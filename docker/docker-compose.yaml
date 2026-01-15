@@ -950,7 +950,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8194/health"]
     networks:
       - ssrf_proxy_network
-
+      - default
   # plugin daemon
   plugin_daemon:
     image: langgenius/dify-plugin-daemon:0.5.2-local
