@@ -27,14 +27,14 @@ for img in $IMAGES; do
 done
 
 # 3. 执行打包
-echo "📦 正在打包所有镜像为 bisheng_offline.tar ..."
+echo "📦 正在打包所有镜像为 images_offline.tar ..."
 # 将换行符转换为空格，传递给 docker save
 IMG_LINE=$(echo $IMAGES | tr '\n' ' ')
-docker save -o bisheng_offline.tar $IMG_LINE
+docker save -o images_offline.tar $IMG_LINE
 
 if [ $? -eq 0 ]; then
-    echo "✅ 打包成功！文件名为: bisheng_offline.tar"
-    ls -lh bisheng_offline.tar
+    echo "✅ 打包成功！文件名为: images_offline.tar"
+    ls -lh images_offline.tar
 else
     echo "❌ 打包失败。"
 fi
