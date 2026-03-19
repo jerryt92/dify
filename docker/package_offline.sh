@@ -1,5 +1,23 @@
 #!/bin/bash
 
+# ==============================================================================
+# 脚本名称: docker_offline_packer.sh (可自行重命名)
+# 功能描述: 解析 docker-compose.yml，交互式拉取并打包 Docker 镜像，方便离线部署。
+#
+# 使用说明:
+# 1. 准备: 将此脚本放置在包含 docker-compose.yml (或 .yaml) 的目录中。
+# 2. 授权: 首次使用需赋予执行权限，执行命令: chmod +x docker_offline_packer.sh
+# 3. 运行: 执行命令: ./docker_offline_packer.sh
+#
+# 核心特性:
+# - 🏗️ 架构选择: 支持跨平台拉取目标架构镜像 (如 linux/amd64 或 linux/arm64)。
+# - 📋 自动解析: 自动读取 docker-compose 配置文件并提取唯一镜像列表。
+# - 🎯 灵活选择: 支持按序号选择需要打包的镜像（逗号分隔），或直接回车全选。
+# - ⚡ 本地优先: 可选择跳过全局拉取，优先使用本地已存在的镜像，节省网络与时间。
+# - 💾 多种导出: 支持合并为一个单个 .tar 文件，或按镜像分别导出到一个新建目录。
+# - 🚀 导入指南: 任务完成后，会自动打印适用于离线服务器的具体导入命令。
+# ==============================================================================
+
 # 定义颜色
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -163,7 +181,7 @@ for img in $TARGET_IMAGES; do
 done
 
 # ===========================
-# 6. 打包镜像
+# 6. 选择导出方式
 # ===========================
 echo "----------------------------------------"
 if [ -z "$FINAL_TARGET_IMAGES" ]; then
@@ -171,18 +189,69 @@ if [ -z "$FINAL_TARGET_IMAGES" ]; then
     exit 1
 fi
 
-OUTPUT_FILENAME="images_offline_${ARCH_NAME}.tar"
-echo -e "📦 [正在打包] 最终将打包以下镜像保存为 ${OUTPUT_FILENAME} ..."
-for img in $FINAL_TARGET_IMAGES; do
-    echo -e "   - ${GREEN}$img${NC}"
-done
+echo -e "${CYAN}💾 请选择镜像导出方式:${NC}"
+echo "1) 导出为单个综合文件 (默认, 适合小项目)"
+echo "2) 按镜像分别导出到新建目录 (适合镜像多或体积大的项目)"
+read -p "请输入选项 [1-2, 默认 1]: " EXPORT_CHOICE
+EXPORT_CHOICE=${EXPORT_CHOICE:-1}
+echo "----------------------------------------"
 
-docker save -o "$OUTPUT_FILENAME" $FINAL_TARGET_IMAGES
+# ===========================
+# 7. 打包镜像与导入提示
+# ===========================
+if [ "$EXPORT_CHOICE" == "2" ]; then
+    # 方式 2：分别导出到新建目录
+    OUTPUT_DIR="images_offline_${ARCH_NAME}_dir"
+    mkdir -p "$OUTPUT_DIR"
+    echo -e "📦 [正在分别打包] 将把以下镜像分别导出到目录 ${YELLOW}${OUTPUT_DIR}${NC} 中 ..."
 
-if [ $? -eq 0 ]; then
-    echo -e "\n${GREEN}✅ 打包成功！${NC}"
-    ls -lh "$OUTPUT_FILENAME"
-    echo -e "${GREEN}现在可以将 ${OUTPUT_FILENAME} 传输到离线服务器了。${NC}"
+    for img in $FINAL_TARGET_IMAGES; do
+        # 替换镜像名中的 / 和 : 为 _，确保它是合法的文件名
+        SAFE_FILENAME=$(echo "$img" | tr '/:' '_').tar
+        echo -e "   ⏳ 正在打包 ${GREEN}$img${NC} -> ${OUTPUT_DIR}/${SAFE_FILENAME}"
+        docker save -o "${OUTPUT_DIR}/${SAFE_FILENAME}" "$img"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}   ❌ 打包失败: $img${NC}"
+        fi
+    done
+
+    echo -e "\n${GREEN}✅ 所有所选镜像已完成打包！${NC}"
+    ls -lh "$OUTPUT_DIR"
+
+    # 针对分目录导出方式的导入提示
+    echo -e "\n${CYAN}========================================${NC}"
+    echo -e "${CYAN}🚀 离线服务器导入指南:${NC}"
+    echo -e "1. 将目录 ${YELLOW}${OUTPUT_DIR}${NC} 整个上传至目标服务器"
+    echo -e "2. 在目标服务器上进入该目录并执行批量导入:"
+    echo -e "   ${GREEN}cd ${OUTPUT_DIR} && for f in *.tar; do docker load -i \"\$f\"; done${NC}"
+    echo -e "3. 镜像导入完成后，进入项目目录启动容器:"
+    echo -e "   ${GREEN}docker compose up -d${NC}"
+    echo -e "${CYAN}========================================${NC}\n"
+
 else
-    echo -e "\n${RED}❌ 打包失败，请检查 Docker 服务或磁盘空间。${NC}"
+    # 方式 1：默认的单一文件导出
+    OUTPUT_FILENAME="images_offline_${ARCH_NAME}.tar"
+    echo -e "📦 [正在打包] 最终将合并打包以下镜像保存为 ${OUTPUT_FILENAME} ..."
+    for img in $FINAL_TARGET_IMAGES; do
+        echo -e "   - ${GREEN}$img${NC}"
+    done
+
+    docker save -o "$OUTPUT_FILENAME" $FINAL_TARGET_IMAGES
+
+    if [ $? -eq 0 ]; then
+        echo -e "\n${GREEN}✅ 打包成功！${NC}"
+        ls -lh "$OUTPUT_FILENAME"
+
+        # 针对单文件导出方式的导入提示
+        echo -e "\n${CYAN}========================================${NC}"
+        echo -e "${CYAN}🚀 离线服务器导入指南:${NC}"
+        echo -e "1. 将生成的文件上传至目标服务器: ${YELLOW}${OUTPUT_FILENAME}${NC}"
+        echo -e "2. 在目标服务器上执行导入命令:"
+        echo -e "   ${GREEN}docker load -i ${OUTPUT_FILENAME}${NC}"
+        echo -e "3. 镜像导入完成后，进入项目目录启动容器:"
+        echo -e "   ${GREEN}docker compose up -d${NC}"
+        echo -e "${CYAN}========================================${NC}\n"
+    else
+        echo -e "\n${RED}❌ 打包失败，请检查 Docker 服务或磁盘空间。${NC}"
+    fi
 fi
