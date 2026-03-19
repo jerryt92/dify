@@ -922,7 +922,7 @@ services:
 
   # The redis cache.
   redis:
-    image: redis:6-alpine
+    image: redis:latest
     restart: no
     environment:
       REDISCLI_AUTH: ${REDIS_PASSWORD:-difyai123456}

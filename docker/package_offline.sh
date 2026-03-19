@@ -41,7 +41,6 @@ echo "----------------------------------------"
 echo "🔍 正在读取镜像列表 (自动去重)..."
 
 # 使用 sort -u 进行去重，防止同一个镜像出现多次导致序号混乱
-# mapfile/readarray 兼容性更好，或者使用括号赋值
 ALL_IMAGES=($(docker compose config --images | sort -u | grep -v "^$"))
 
 if [ ${#ALL_IMAGES[@]} -eq 0 ]; then
@@ -102,48 +101,88 @@ if [ -z "$TARGET_IMAGES" ]; then
 fi
 
 # ===========================
-# 4. 最终确认 (防止选错)
+# 4. 最终确认与拉取选项
 # ===========================
 echo "----------------------------------------"
-echo -e "${CYAN}📦 准备打包清单 (架构: $PLATFORM):${NC}"
+echo -e "${CYAN}📦 准备打包清单:${NC}"
 for img in $TARGET_IMAGES; do
     echo -e "   - ${GREEN}$img${NC}"
 done
 echo "----------------------------------------"
 
-read -p "确认开始拉取并打包吗? (y/n) [默认 y]: " CONFIRM
-CONFIRM=${CONFIRM:-y}
+read -p "是否跳过全局拉取过程，优先使用本地已有镜像？ (y/n) [默认 y]: " SKIP_PULL
+SKIP_PULL=${SKIP_PULL:-y}
 
-if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
-    echo "🚫 操作已取消。"
-    exit 0
+if [[ "$SKIP_PULL" == "y" || "$SKIP_PULL" == "Y" ]]; then
+    echo -e "✅ 已选择 ${GREEN}跳过全局拉取${NC}，将优先使用本地镜像。"
+    DO_PULL=false
+else
+    echo -e "✅ 已选择 ${GREEN}拉取最新镜像${NC} (架构: $PLATFORM)。"
+    DO_PULL=true
 fi
+echo "----------------------------------------"
 
 # ===========================
-# 5. 执行拉取和打包
+# 5. 执行验证与拉取
 # ===========================
 echo ""
-for img in $TARGET_IMAGES; do
-    echo -e "⏳ [正在拉取] $img ..."
-    docker pull --platform "$PLATFORM" "$img"
+FINAL_TARGET_IMAGES="" # 用于存放最终确实存在的镜像，防止 save 报错
 
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ 拉取失败: $img${NC}"
-        # 这里可以选择 exit 1，或者继续拉取下一个
-        echo "⚠️  尝试继续下一个..."
+for img in $TARGET_IMAGES; do
+    if [ "$DO_PULL" = true ]; then
+        echo -e "⏳ [正在拉取] $img ..."
+        docker pull --platform "$PLATFORM" "$img"
+        if [ $? -eq 0 ]; then
+            FINAL_TARGET_IMAGES="$FINAL_TARGET_IMAGES $img"
+        else
+            echo -e "${RED}❌ 拉取失败: $img，将跳过打包该镜像。${NC}"
+        fi
+    else
+        # 检查本地是否存在该镜像
+        if docker image inspect "$img" > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ 本地已存在: $img${NC}"
+            FINAL_TARGET_IMAGES="$FINAL_TARGET_IMAGES $img"
+        else
+            echo -e "${YELLOW}⚠️ 本地未找到镜像: $img${NC}"
+            read -p "   👉 是否现在拉取该镜像？ (y/n) [默认 y]: " PULL_MISSING
+            PULL_MISSING=${PULL_MISSING:-y}
+
+            if [[ "$PULL_MISSING" == "y" || "$PULL_MISSING" == "Y" ]]; then
+                echo -e "⏳ [正在拉取] $img ..."
+                docker pull --platform "$PLATFORM" "$img"
+                if [ $? -eq 0 ]; then
+                    FINAL_TARGET_IMAGES="$FINAL_TARGET_IMAGES $img"
+                else
+                    echo -e "${RED}❌ 拉取失败: $img，将跳过打包该镜像。${NC}"
+                fi
+            else
+                echo -e "⏩ 已跳过: $img"
+            fi
+        fi
     fi
 done
 
-OUTPUT_FILENAME="images_offline_${ARCH_NAME}.tar"
-echo ""
-echo -e "📦 [正在打包] 保存为 ${OUTPUT_FILENAME} ..."
+# ===========================
+# 6. 打包镜像
+# ===========================
+echo "----------------------------------------"
+if [ -z "$FINAL_TARGET_IMAGES" ]; then
+    echo -e "${RED}❌ 错误：经过筛选后，没有可用于打包的有效镜像，操作取消。${NC}"
+    exit 1
+fi
 
-docker save -o "$OUTPUT_FILENAME" $TARGET_IMAGES
+OUTPUT_FILENAME="images_offline_${ARCH_NAME}.tar"
+echo -e "📦 [正在打包] 最终将打包以下镜像保存为 ${OUTPUT_FILENAME} ..."
+for img in $FINAL_TARGET_IMAGES; do
+    echo -e "   - ${GREEN}$img${NC}"
+done
+
+docker save -o "$OUTPUT_FILENAME" $FINAL_TARGET_IMAGES
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ 打包成功！${NC}"
+    echo -e "\n${GREEN}✅ 打包成功！${NC}"
     ls -lh "$OUTPUT_FILENAME"
     echo -e "${GREEN}现在可以将 ${OUTPUT_FILENAME} 传输到离线服务器了。${NC}"
 else
-    echo -e "${RED}❌ 打包失败。${NC}"
+    echo -e "\n${RED}❌ 打包失败，请检查 Docker 服务或磁盘空间。${NC}"
 fi
